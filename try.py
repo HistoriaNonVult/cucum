@@ -105,7 +105,7 @@ def pso_optimizer(n_particles, n_iterations, initial_solution=None):
     gbest_idx = np.argmax(pbest_fitness)
     gbest_pos = pbest_pos[gbest_idx]
     gbest_fitness = pbest_fitness[gbest_idx]
-    w, c1, c2 = 0.5, 1.5, 1.5
+    w, c1, c2 = 0.7, 1.5, 1.5
     print("\n--- 开始优化 ---")
     start_time = time.time()
     for it in range(n_iterations):
@@ -165,3 +165,12 @@ if __name__ == '__main__':
     print(f"烟幕弹爆炸时间: {tb_opt:.3f} s")
     print("--------------------")
     print(f"最大有效遮蔽时间: {max_time:.3f} s")
+
+# --- 问题2 最优策略 ---
+# 无人机飞行速度 (v_f): 130.62 m/s
+# 无人机飞行角度 (θ): 179.33 度
+# 烟幕弹投放点坐标: (17604.09, 2.28, 1800.00)
+# 烟幕弹起爆点坐标: (17063.57, 8.59, 1716.08)
+# 烟幕弹爆炸时间: 5.638 s
+# --------------------
+# 最大有效遮蔽时间: 4.180 s
