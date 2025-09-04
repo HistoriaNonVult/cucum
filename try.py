@@ -1,217 +1,167 @@
 import numpy as np
-import matplotlib.pyplot as plt
-from mpl_toolkits.mplot3d import Axes3D
+import time
 
-# 系统参数
-missile_speed = 300  # m/s
-drone_speed = 120    # m/s
-smoke_radius = 10    # m
-smoke_sink_speed = 3 # m/s
-smoke_duration = 20  # s
-target_radius = 7    # m
-target_height = 10   # m
+# --- 1. 定义常量 (已根据题目核对) ---
+# 导弹M1
+V_M1 = 300  # 速度 (m/s)
+P0_M1 = np.array([20000, 0, 2000])  # 初始位置 (m)
+TARGET_FALSE = np.array([0, 0, 0])   # 假目标位置 (m)
 
-# 初始位置
-M1_initial = np.array([20000, 0, 2000])
-FY1_initial = np.array([17800, 0, 1800])
-fake_target = np.array([0, 0, 0])
-real_target_center = np.array([0, 200, 0])
+# 无人机 FY1
+P0_FY1 = np.array([17800, 0, 1800]) # 初始位置 (m)
+V_FY1_MIN, V_FY1_MAX = 70, 140       # 速度范围 (m/s)
 
-# 时间参数
-task_start_time = 0
-deploy_time = 1.5  # 投放时间
-explosion_delay = 3.6  # 起爆延迟
-explosion_time = deploy_time + explosion_delay  # 5.1s
+# 真目标 (圆柱体)
+TARGET_TRUE_CENTER_BASE = np.array([0, 200, 0]) # 底面中心
+TARGET_TRUE_RADIUS = 7    # 半径 (m)
+TARGET_TRUE_HEIGHT = 10   # 高度 (m)
 
-def calculate_missile_position(t):
-    """计算导弹在t时刻的位置"""
-    # 导弹朝向假目标飞行
-    direction = fake_target - M1_initial
-    direction = direction / np.linalg.norm(direction)
-    return M1_initial + missile_speed * t * direction
+# 烟幕
+SMOKE_CLOUD_RADIUS = 10   # 烟幕云半径 (m)
+SMOKE_CLOUD_SINK_V = 3    # 烟幕云下沉速度 (m/s)
+SMOKE_DURATION = 20       # 烟幕有效持续时间 (s)
 
-def calculate_drone_position(t):
-    """计算无人机在t时刻的位置（受领任务后）"""
-    # 无人机朝向假目标飞行
-    direction = fake_target - FY1_initial
-    direction = direction / np.linalg.norm(direction)
-    return FY1_initial + drone_speed * t * direction
+# 物理常量
+G = 9.8  # 重力加速度 (m/s^2)
 
-def calculate_smoke_position(t_after_deploy):
-    """计算烟幕弹在投放后t时刻的位置（自由落体）"""
-    drone_pos_at_deploy = calculate_drone_position(deploy_time)
-    # 自由落体运动
-    fall_distance = 0.5 * 9.8 * t_after_deploy**2
-    smoke_pos = drone_pos_at_deploy.copy()
-    smoke_pos[2] -= fall_distance
-    return smoke_pos
+# --- 2. 运动学模型 ---
+direction_m1 = (TARGET_FALSE - P0_M1) / np.linalg.norm(TARGET_FALSE - P0_M1)
+def missile_position(t):
+    return P0_M1 + V_M1 * t * direction_m1
 
-def calculate_smoke_center_after_explosion(t_after_explosion):
-    """计算起爆后烟幕中心的位置"""
-    smoke_pos_at_explosion = calculate_smoke_position(explosion_delay)
-    # 烟幕下沉
-    smoke_center = smoke_pos_at_explosion.copy()
-    smoke_center[2] -= smoke_sink_speed * t_after_explosion
-    return smoke_center
+def uav_position(v_f, theta, t):
+    vx = v_f * np.cos(theta)
+    vy = v_f * np.sin(theta)
+    return P0_FY1 + t * np.array([vx, vy, 0])
 
-def is_line_intersect_sphere(p1, p2, center, radius):
-    """判断线段是否与球相交"""
-    # 线段从p1到p2，球心center，半径radius
-    d = p2 - p1
-    f = p1 - center
-    
-    a = np.dot(d, d)
-    b = 2 * np.dot(f, d)
-    c = np.dot(f, f) - radius**2
-    
+def grenade_position(v_f, theta, t_d, t):
+    if t < t_d: return uav_position(v_f, theta, t)
+    p0_grenade = uav_position(v_f, theta, t_d)
+    v0_grenade = np.array([v_f * np.cos(theta), v_f * np.sin(theta), 0])
+    dt = t - t_d
+    pos = p0_grenade + v0_grenade * dt + 0.5 * np.array([0, 0, -G]) * dt**2
+    return pos
+
+def cloud_center_position(v_f, theta, t_d, t_b, t):
+    if t < t_b: return None
+    p_detonation = grenade_position(v_f, theta, t_d, t_b)
+    dt = t - t_b
+    return p_detonation + dt * np.array([0, 0, -SMOKE_CLOUD_SINK_V])
+
+# --- 3. 几何遮蔽判断 ---
+target_key_points = []
+for h in [0, TARGET_TRUE_HEIGHT]:
+    center = TARGET_TRUE_CENTER_BASE + np.array([0, 0, h])
+    for angle in np.linspace(0, 2 * np.pi, 8, endpoint=False): # 增加关键点以提高精度
+        target_key_points.append(center + np.array([TARGET_TRUE_RADIUS * np.cos(angle), TARGET_TRUE_RADIUS * np.sin(angle), 0]))
+target_key_points.append(TARGET_TRUE_CENTER_BASE + np.array([0, 0, TARGET_TRUE_HEIGHT/2]))
+
+def is_line_segment_intercepted_by_sphere(p1, p2, sphere_center, sphere_radius):
+    v = p2 - p1
+    a = np.dot(v, v)
+    if a == 0: return False
+    b = 2 * np.dot(v, p1 - sphere_center)
+    c = np.dot(p1 - sphere_center, p1 - sphere_center) - sphere_radius**2
     discriminant = b**2 - 4*a*c
-    if discriminant < 0:
-        return False
-    
-    discriminant = np.sqrt(discriminant)
-    t1 = (-b - discriminant) / (2*a)
-    t2 = (-b + discriminant) / (2*a)
-    
-    # 检查交点是否在线段上
-    if (0 <= t1 <= 1) or (0 <= t2 <= 1) or (t1 < 0 and t2 > 1):
-        return True
+    if discriminant < 0: return False
+    t1 = (-b - np.sqrt(discriminant)) / (2 * a)
+    t2 = (-b + np.sqrt(discriminant)) / (2 * a)
+    if (0 <= t1 <= 1) or (0 <= t2 <= 1) or (t1*t2 < 0): return True
     return False
 
-def check_obstruction(t):
-    """检查在时刻t，烟幕是否遮挡了导弹对真目标的视线"""
-    if t < explosion_time:
-        return False
+def is_shielded(m_pos, c_pos):
+    if c_pos is None: return False
+    for point in target_key_points:
+        if not is_line_segment_intercepted_by_sphere(m_pos, point, c_pos, SMOKE_CLOUD_RADIUS):
+            return False
+    return True
+
+# --- 4. 适应度函数 ---
+def calculate_fitness(params):
+    v_f, theta, t_d, t_b = params
+    if t_d < 1.5 or t_b <= t_d: return 0.0
+    total_shielding_time = 0
+    time_step = 0.01 # 使用更小的时间步长以提高精度
+    for t in np.arange(t_b, t_b + SMOKE_DURATION, time_step):
+        m_pos = missile_position(t)
+        if m_pos[0] <= TARGET_TRUE_CENTER_BASE[0]: break
+        c_pos = cloud_center_position(v_f, theta, t_d, t_b, t)
+        if c_pos is not None and c_pos[2] < -SMOKE_CLOUD_RADIUS: break
+        if is_shielded(m_pos, c_pos):
+            total_shielding_time += time_step
+    return total_shielding_time
+
+# --- 5. PSO 主算法 ---
+def pso_optimizer(n_particles, n_iterations, initial_solution=None):
+    bounds = [(V_FY1_MIN, V_FY1_MAX), (0, 2 * np.pi), (1.5, 40), (2, 50)]
+    particles_pos = np.random.rand(n_particles, 4)
+    for i in range(4):
+        particles_pos[:, i] = particles_pos[:, i] * (bounds[i][1] - bounds[i][0]) + bounds[i][0]
+    if initial_solution is not None:
+        particles_pos[0] = initial_solution
+    particles_vel = np.random.randn(n_particles, 4) * 0.1
+    pbest_pos = np.copy(particles_pos)
+    pbest_fitness = np.array([calculate_fitness(p) for p in pbest_pos])
+    gbest_idx = np.argmax(pbest_fitness)
+    gbest_pos = pbest_pos[gbest_idx]
+    gbest_fitness = pbest_fitness[gbest_idx]
+    w, c1, c2 = 0.5, 1.5, 1.5
+    print("\n--- 开始优化 ---")
+    start_time = time.time()
+    for it in range(n_iterations):
+        for i in range(n_particles):
+            current_fitness = calculate_fitness(particles_pos[i])
+            if current_fitness > pbest_fitness[i]:
+                pbest_fitness[i] = current_fitness
+                pbest_pos[i] = particles_pos[i]
+                if current_fitness > gbest_fitness:
+                    gbest_fitness = current_fitness
+                    gbest_pos = particles_pos[i]
+        for i in range(n_particles):
+            r1, r2 = np.random.rand(2)
+            cognitive_vel = c1 * r1 * (pbest_pos[i] - particles_pos[i])
+            social_vel = c2 * r2 * (gbest_pos - particles_pos[i])
+            particles_vel[i] = w * particles_vel[i] + cognitive_vel + social_vel
+            particles_pos[i] += particles_vel[i]
+            for j in range(4):
+                particles_pos[i, j] = np.clip(particles_pos[i, j], bounds[j][0], bounds[j][1])
+        if (it + 1) % 10 == 0:
+            print(f"迭代次数: {it + 1}/{n_iterations}, 当前最优遮蔽时间: {gbest_fitness:.3f} s")
+    end_time = time.time()
+    print(f"优化完成! 总耗时: {end_time - start_time:.2f} s")
+    return gbest_pos, gbest_fitness
+
+# --- 6. 执行与结果 ---
+if __name__ == '__main__':
+    # --- 第1步: 验证问题1的条件 ---
+    print("--- 正在验证问题1的条件 ---")
+    v_f_initial = 120.0
+    t_d_initial = 1.5
+    t_b_initial = 1.5 + 3.6
+    direction_vector_xy = TARGET_FALSE[0:2] - P0_FY1[0:2]
+    theta_initial = np.arctan2(direction_vector_xy[1], direction_vector_xy[0])
+    initial_params = np.array([v_f_initial, theta_initial, t_d_initial, t_b_initial])
+    shielding_time = calculate_fitness(initial_params)
+    print(f"计算得到的初始遮蔽时间为: {shielding_time:.3f} s")
+
+    # --- 第2步: 以问题1为起点，优化求解问题2 ---
+    NUM_PARTICLES = 50
+    NUM_ITERATIONS = 50
+    best_solution, max_time = pso_optimizer(
+        NUM_PARTICLES, 
+        NUM_ITERATIONS, 
+        initial_solution=initial_params
+    )
     
-    t_after_explosion = t - explosion_time
-    if t_after_explosion > smoke_duration:
-        return False
+    v_opt, theta_opt, td_opt, tb_opt = best_solution
+    drop_point_opt = uav_position(v_opt, theta_opt, td_opt)
+    detonation_point_opt = grenade_position(v_opt, theta_opt, td_opt, tb_opt)
     
-    # 获取当前位置
-    missile_pos = calculate_missile_position(t)
-    smoke_center = calculate_smoke_center_after_explosion(t_after_explosion)
-    
-    # 检查导弹到真目标的视线是否被烟幕遮挡
-    # 真目标是一个圆柱，检查多个点
-    obstruction_count = 0
-    total_points = 0
-    
-    # 检查真目标圆柱体上的多个点
-    for angle in np.linspace(0, 2*np.pi, 8, endpoint=False):
-        for h in [0, target_height/2, target_height]:
-            target_point = real_target_center + np.array([
-                target_radius * np.cos(angle),
-                target_radius * np.sin(angle),
-                h
-            ])
-            total_points += 1
-            
-            if is_line_intersect_sphere(missile_pos, target_point, smoke_center, smoke_radius):
-                obstruction_count += 1
-    
-    # 如果大部分视线被遮挡，认为有效遮蔽
-    return obstruction_count > total_points * 0.5
-
-# 计算有效遮蔽时长
-time_step = 0.01
-max_time = 30
-obstruction_times = []
-
-for t in np.arange(0, max_time, time_step):
-    if check_obstruction(t):
-        obstruction_times.append(t)
-
-# 计算连续遮蔽时段
-if obstruction_times:
-    start_time = obstruction_times[0]
-    end_time = obstruction_times[-1]
-    total_obstruction_time = end_time - start_time
-else:
-    total_obstruction_time = 0
-    start_time = 0
-    end_time = 0
-
-# 输出结果
-print("="*60)
-print("问题1 计算结果")
-print("="*60)
-print(f"无人机FY1初始位置: {FY1_initial}")
-print(f"无人机飞行速度: {drone_speed} m/s")
-print(f"无人机飞行方向: 朝向假目标")
-print(f"投放时间: {deploy_time} s")
-print(f"起爆时间: {explosion_time} s")
-print(f"投放点位置: {calculate_drone_position(deploy_time)}")
-print(f"起爆点位置: {calculate_smoke_position(explosion_delay)}")
-print("-"*60)
-if total_obstruction_time > 0:
-    print(f"有效遮蔽开始时间: {start_time:.2f} s")
-    print(f"有效遮蔽结束时间: {end_time:.2f} s")
-    print(f"有效遮蔽时长: {total_obstruction_time:.2f} s")
-else:
-    print("未形成有效遮蔽")
-
-# 可视化轨迹
-fig = plt.figure(figsize=(12, 8))
-ax = fig.add_subplot(111, projection='3d')
-
-# 绘制时间序列的位置
-time_points = np.linspace(0, 25, 100)
-missile_trajectory = np.array([calculate_missile_position(t) for t in time_points])
-drone_trajectory = np.array([calculate_drone_position(t) for t in time_points if t <= deploy_time])
-
-# 绘制轨迹
-ax.plot(missile_trajectory[:, 0], missile_trajectory[:, 1], missile_trajectory[:, 2], 
-        'r-', label='导弹M1轨迹', linewidth=2)
-ax.plot(drone_trajectory[:, 0], drone_trajectory[:, 1], drone_trajectory[:, 2], 
-        'b-', label='无人机FY1轨迹', linewidth=2)
-
-# 标记关键点
-ax.scatter(*M1_initial, color='red', s=100, marker='^', label='M1初始位置')
-ax.scatter(*FY1_initial, color='blue', s=100, marker='s', label='FY1初始位置')
-ax.scatter(*fake_target, color='black', s=200, marker='x', label='假目标')
-ax.scatter(*real_target_center, color='green', s=200, marker='o', label='真目标中心')
-ax.scatter(*calculate_drone_position(deploy_time), color='orange', s=150, 
-           marker='v', label='投放点')
-ax.scatter(*calculate_smoke_position(explosion_delay), color='purple', s=150, 
-           marker='*', label='起爆点')
-
-# 绘制烟幕云团（在某个时刻）
-if obstruction_times:
-    t_sample = (start_time + end_time) / 2
-    smoke_center_sample = calculate_smoke_center_after_explosion(t_sample - explosion_time)
-    u = np.linspace(0, 2 * np.pi, 20)
-    v = np.linspace(0, np.pi, 20)
-    x = smoke_radius * np.outer(np.cos(u), np.sin(v)) + smoke_center_sample[0]
-    y = smoke_radius * np.outer(np.sin(u), np.sin(v)) + smoke_center_sample[1]
-    z = smoke_radius * np.outer(np.ones(np.size(u)), np.cos(v)) + smoke_center_sample[2]
-    ax.plot_surface(x, y, z, alpha=0.3, color='gray')
-
-ax.set_xlabel('X (m)')
-ax.set_ylabel('Y (m)')
-ax.set_zlabel('Z (m)')
-ax.set_title('烟幕干扰弹投放策略示意图')
-ax.legend()
-plt.show()
-
-# 更详细的分析
-print("\n" + "="*60)
-print("详细分析")
-print("="*60)
-
-# 计算关键时刻的状态
-for t in [0, deploy_time, explosion_time, explosion_time + 5, explosion_time + 10]:
-    missile_pos = calculate_missile_position(t)
-    missile_dist_to_fake = np.linalg.norm(missile_pos - fake_target)
-    missile_dist_to_real = np.linalg.norm(missile_pos - real_target_center)
-    
-    print(f"\n时刻 t = {t:.1f} s:")
-    print(f"  导弹位置: ({missile_pos[0]:.1f}, {missile_pos[1]:.1f}, {missile_pos[2]:.1f})")
-    print(f"  导弹距假目标: {missile_dist_to_fake:.1f} m")
-    print(f"  导弹距真目标: {missile_dist_to_real:.1f} m")
-    
-    if t >= explosion_time and t <= explosion_time + smoke_duration:
-        smoke_center = calculate_smoke_center_after_explosion(t - explosion_time)
-        print(f"  烟幕中心位置: ({smoke_center[0]:.1f}, {smoke_center[1]:.1f}, {smoke_center[2]:.1f})")
-        if check_obstruction(t):
-            print("  ✓ 有效遮蔽")
-        else:
-            print("  ✗ 未形成有效遮蔽")
+    print("\n--- 问题2 最优策略 ---")
+    print(f"无人机飞行速度 (v_f): {v_opt:.2f} m/s")
+    print(f"无人机飞行角度 (θ): {np.rad2deg(theta_opt):.2f} 度")
+    print(f"烟幕弹投放点坐标: ({drop_point_opt[0]:.2f}, {drop_point_opt[1]:.2f}, {drop_point_opt[2]:.2f})")
+    print(f"烟幕弹起爆点坐标: ({detonation_point_opt[0]:.2f}, {detonation_point_opt[1]:.2f}, {detonation_point_opt[2]:.2f})")
+    print(f"烟幕弹爆炸时间: {tb_opt:.3f} s")
+    print("--------------------")
+    print(f"最大有效遮蔽时间: {max_time:.3f} s")
