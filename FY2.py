@@ -91,6 +91,28 @@ def calculate_fitness(params):
             total_shielding_time += time_step
     return total_shielding_time
 
+# --- 辅助函数: 计算遮蔽时间段 ---
+def calculate_shield_details(params):
+    v_f, theta, t_d, t_b = params
+    if not (t_b > t_d): return 0.0, -1.0, -1.0
+    
+    total_shielding_time = 0.0
+    start_shield = -1.0
+    end_shield = -1.0
+    time_step = 0.1
+    
+    for t in np.arange(t_b, t_b + SMOKE_DURATION, time_step):
+        m_pos = missile_position(t)
+        if m_pos[0] <= TARGET_TRUE_CENTER_BASE[0]: break
+        c_pos = cloud_center_position(v_f, theta, t_d, t_b, t)
+        if is_shielded(m_pos, c_pos):
+            if start_shield < 0:
+                start_shield = t
+            end_shield = t
+            total_shielding_time += time_step
+            
+    return total_shielding_time, start_shield, end_shield
+
 # --- 5. PSO 主算法 (已简化为4维优化) ---
 def pso_optimizer(n_particles, n_iterations):
     bounds = [(V_UAV_MIN, V_UAV_MAX), (0, 2 * np.pi), (1, 30), (2, 40)]
@@ -108,7 +130,7 @@ def pso_optimizer(n_particles, n_iterations):
     gbest_pos = pbest_pos[gbest_idx]
     gbest_fitness = pbest_fitness[gbest_idx]
     
-    w, c1, c2 = 0.9, 1.8, 1.8
+    w, c1, c2 = 0.7, 1.5, 1.5
     print("\n--- 开始优化(单机FY2) ---")
     start_time = time.time()
     
@@ -150,6 +172,8 @@ if __name__ == '__main__':
     
     drop_point = uav_position(v_opt, theta_opt, td_opt)
     detonation_point = grenade_position(v_opt, theta_opt, td_opt, tb_opt)
+    
+    _, start_t, end_t = calculate_shield_details(best_solution)
 
     print("\n" + "="*65)
     print(" " * 18 + "无人机 FY2 单机最优投放策略")
@@ -160,17 +184,20 @@ if __name__ == '__main__':
     print(f"  - 投放点坐标: ({drop_point[0]:.2f}, {drop_point[1]:.2f}, {drop_point[2]:.2f})")
     print(f"  - 起爆时间: {tb_opt:.3f} s")
     print(f"  - 起爆点坐标: ({detonation_point[0]:.2f}, {detonation_point[1]:.2f}, {detonation_point[2]:.2f})")
+    if start_t > 0:
+        print(f"  - 遮蔽时间段: {start_t:.3f}s - {end_t:.3f}s")
+    else:
+        print(f"  - 遮蔽时间段: 无")
     print("="*65)
     print(f"最大有效遮蔽时间: {max_time:.3f} s")
     print("="*65)
-#                   无人机 FY2 单机最优投放策略
+
+#   - 飞行速度: 125.57 m/s
+#   - 飞行方向: 305.64 度
+#   - 投放时间: 8.995 s
+#   - 投放点坐标: (12658.19, 482.04, 1400.00)
+#   - 起爆时间: 13.415 s
+#   - 起爆点坐标: (12981.61, 30.96, 1304.27)
+#   - 遮蔽时间段: 13.515s - 17.315s
 # =================================================================
-#   - 飞行速度: 81.13 m/s
-#   - 飞行方向: 360.00 度
-#   - 投放时间: 1.000 s
-#   - 投放点坐标: (12081.13, 1400.00, 1400.00)
-#   - 起爆时间: 16.447 s
-#   - 起爆点坐标: (13334.35, 1400.00, 230.78)
-# =================================================================
-# 最大有效遮蔽时间: 3.700 s
-# =================================================================
+# 最大有效遮蔽时间: 4.000 s

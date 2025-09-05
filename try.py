@@ -108,7 +108,7 @@ def calculate_fitness_q4(params):
     
     return total_shielding_time
 
-# --- 辅助函数: 计算单弹遮蔽时间与时间段 (已修改) ---
+# --- 辅助函数: 计算单弹遮蔽时间与时间段 ---
 def calculate_single_shield_details(uav_id, uav_params):
     v_f, theta, t_d, t_b = uav_params
     if not (t_b > t_d): return 0.0, -1.0, -1.0
@@ -123,9 +123,9 @@ def calculate_single_shield_details(uav_id, uav_params):
         if m_pos[0] <= TARGET_TRUE_CENTER_BASE[0]: break
         c_pos = cloud_center_position(uav_id, v_f, theta, t_d, t_b, t)
         if is_shielded(m_pos, c_pos):
-            if start_shield < 0: # 首次探测到遮蔽
+            if start_shield < 0:
                 start_shield = t
-            end_shield = t # 持续更新最后遮蔽时间
+            end_shield = t
             single_shield_time += time_step
             
     return single_shield_time, start_shield, end_shield
@@ -135,7 +135,7 @@ def pso_optimizer(n_particles, n_iterations, initial_solution=None):
     bounds = [
         (V_UAV_MIN, V_UAV_MAX), (0, 2 * np.pi), (1, 30), (2, 40),
         (V_UAV_MIN, V_UAV_MAX), (0, 2 * np.pi), (1, 30), (2, 40),
-        (V_UAV_MIN, V_UAV_MAX), (0, 2 * np.pi), (1, 30), (2, 40),
+        (V_UAV_MIN, V_UAV_MAX), (0, 2 * np.pi), (1, 30), (32, 50),
     ]
     n_dim = len(bounds)
     
@@ -151,7 +151,7 @@ def pso_optimizer(n_particles, n_iterations, initial_solution=None):
     pbest_fitness = np.array([calculate_fitness_q4(p) for p in pbest_pos])
     
     gbest_idx = np.argmax(pbest_fitness)
-    gbest_pos = np.copy(pbest_pos[gbest_idx])
+    gbest_pos = pbest_pos[gbest_idx]
     gbest_fitness = pbest_fitness[gbest_idx]
     
     w, c1, c2 = 0.7, 1.5, 1.5
@@ -172,12 +172,11 @@ def pso_optimizer(n_particles, n_iterations, initial_solution=None):
             
             if current_fitness > pbest_fitness[i]:
                 pbest_fitness[i] = current_fitness
-                pbest_pos[i] = np.copy(particles_pos[i])
+                pbest_pos[i] = particles_pos[i]
                 if current_fitness > gbest_fitness:
                     gbest_fitness = current_fitness
-                    gbest_pos = np.copy(particles_pos[i])
+                    gbest_pos = particles_pos[i]
         
-        # <-- 修改点：恢复过程打印 -->
         if (it + 1) % 5 == 0:
             print(f"迭代次数: {it + 1}/{n_iterations}, 当前最优遮蔽时间: {gbest_fitness:.3f} s")
             
@@ -198,18 +197,17 @@ if __name__ == '__main__':
     td1_initial = 1.5
     tb1_initial = 1.6
     
+    # 策略 2 (for FY2)
+    v2_initial = 125.57
+    theta2_initial = np.deg2rad(305.64)
+    td2_initial = 8.995
+    tb2_initial = 13.415
+
     # 策略 3 (for FY3)
     v3_initial = 98.15
     theta3_initial = np.deg2rad(93.30)
     td3_initial = 26.757
     tb3_initial = 31.445
-    
-    # 为FY2设置一个合理的默认初始值 (朝向假目标)
-    v2_initial = 120.0
-    td2_initial = 1.5
-    tb2_initial = 5.1
-    direction_vector_fy2 = TARGET_FALSE[0:2] - UAV_INITIAL_POSITIONS['FY2'][0:2]
-    theta2_initial = np.arctan2(direction_vector_fy2[1], direction_vector_fy2[0])
     
     initial_solution = np.array([
         v1_initial, theta1_initial, td1_initial, tb1_initial,
@@ -226,23 +224,24 @@ if __name__ == '__main__':
         initial_solution=initial_solution
     )
     
-    # 记录最终最优参数
     v1, th1, td1, tb1, v2, th2, td2, tb2, v3, th3, td3, tb3 = best_solution
-
-    # 计算各无人机的投放点、起爆点、遮蔽时间等
+    
+    # 分别计算每个弹的详细遮蔽信息
+    shield_time1, start1, end1 = calculate_single_shield_details('FY1', (v1, th1, td1, tb1))
+    shield_time2, start2, end2 = calculate_single_shield_details('FY2', (v2, th2, td2, tb2))
+    shield_time3, start3, end3 = calculate_single_shield_details('FY3', (v3, th3, td3, tb3))
+    
     drop_point1 = uav_position('FY1', v1, th1, td1)
     detonation_point1 = grenade_position('FY1', v1, th1, td1, tb1)
-    shield_time1, start1, end1 = calculate_single_shield_details('FY1', (v1, th1, td1, tb1))
-
     drop_point2 = uav_position('FY2', v2, th2, td2)
     detonation_point2 = grenade_position('FY2', v2, th2, td2, tb2)
-    shield_time2, start2, end2 = calculate_single_shield_details('FY2', (v2, th2, td2, tb2))
-
     drop_point3 = uav_position('FY3', v3, th3, td3)
     detonation_point3 = grenade_position('FY3', v3, th3, td3, tb3)
-    shield_time3, start3, end3 = calculate_single_shield_details('FY3', (v3, th3, td3, tb3))
 
-    # --- 打印FY1的策略 ---
+    print("\n" + "="*65)
+    print(" " * 20 + "问题4 最优协同投放策略")
+    print("="*65)
+
     print(f"无人机 FY1:")
     print(f"  - 飞行速度: {v1:.2f} m/s")
     print(f"  - 飞行方向: {np.rad2deg(th1):.2f} 度")
@@ -257,7 +256,6 @@ if __name__ == '__main__':
         print(f"  - 遮蔽时间段: 无")
     print("-"*65)
 
-    # --- 打印FY2的策略 ---
     print(f"无人机 FY2:")
     print(f"  - 飞行速度: {v2:.2f} m/s")
     print(f"  - 飞行方向: {np.rad2deg(th2):.2f} 度")
@@ -272,7 +270,6 @@ if __name__ == '__main__':
         print(f"  - 遮蔽时间段: 无")
     print("-"*65)
     
-    # --- 打印FY3的策略 ---
     print(f"无人机 FY3:")
     print(f"  - 飞行速度: {v3:.2f} m/s")
     print(f"  - 飞行方向: {np.rad2deg(th3):.2f} 度")
@@ -290,6 +287,9 @@ if __name__ == '__main__':
     print(f"最大有效综合遮蔽时间: {max_time:.3f} s")
     print("="*65)
 
+# =================================================================
+#                     问题4 最优协同投放策略
+# =================================================================
 # 无人机 FY1:
 #   - 飞行速度: 70.00 m/s
 #   - 飞行方向: 3.97 度
@@ -300,15 +300,15 @@ if __name__ == '__main__':
 #   - 单弹有效遮蔽: 4.600 s
 #   - 遮蔽时间段: 2.300s - 6.800s
 # -----------------------------------------------------------------
-#   无人机 FY2:
-#
-#   - 飞行速度: 81.13 m/s
-#   - 飞行方向: 360.00 度
-#   - 投放时间: 1.000 s
-#   - 投放点坐标: (12081.13, 1400.00, 1400.00)
-#   - 起爆时间: 16.447 s
-#   - 起爆点坐标: (13334.35, 1400.00, 230.78)
-
+# 无人机 FY2:
+#   - 飞行速度: 125.57 m/s
+#   - 飞行方向: 305.64 度
+#   - 投放时间: 8.995 s
+#   - 投放点坐标: (12658.15, 482.06, 1400.00)
+#   - 起爆时间: 13.415 s
+#   - 起爆点坐标: (12981.55, 31.00, 1304.27)
+#   - 单弹有效遮蔽: 3.900 s
+#   - 遮蔽时间段: 13.515s - 17.315s
 # -----------------------------------------------------------------
 # 无人机 FY3:
 #   - 飞行速度: 98.15 m/s
@@ -319,3 +319,6 @@ if __name__ == '__main__':
 #   - 起爆点坐标: (5822.34, 81.21, 592.31)
 #   - 单弹有效遮蔽: 2.800 s
 #   - 遮蔽时间段: 32.845s - 35.545s
+# =================================================================
+# 最大有效综合遮蔽时间: 11.300 s
+# =================================================================
