@@ -89,7 +89,7 @@ def calculate_fitness_q4(params):
         return 0.0
 
     total_shielding_time = 0
-    time_step = 0.1
+    time_step = 0.01
     start_time = min(tb1, tb2, tb3)
     end_time = max(tb1, tb2, tb3) + SMOKE_DURATION
 
@@ -116,7 +116,7 @@ def calculate_single_shield_details(uav_id, uav_params):
     single_shield_time = 0.0
     start_shield = -1.0
     end_shield = -1.0
-    time_step = 0.1
+    time_step = 0.01
     
     for t in np.arange(t_b, t_b + SMOKE_DURATION, time_step):
         m_pos = missile_position(t)
@@ -154,7 +154,7 @@ def pso_optimizer(n_particles, n_iterations, initial_solution=None):
     gbest_pos = pbest_pos[gbest_idx]
     gbest_fitness = pbest_fitness[gbest_idx]
     
-    w, c1, c2 = 0.7, 1.5, 1.5
+    w, c1, c2 = 0.9, 2.0, 2.0
     print("\n--- 开始优化(问题4: 3机协同) ---")
     start_time = time.time()
     
@@ -186,7 +186,7 @@ def pso_optimizer(n_particles, n_iterations, initial_solution=None):
 
 # --- 6. 执行与结果 ---
 if __name__ == '__main__':
-    NUM_PARTICLES = 100
+    NUM_PARTICLES = 1000
     NUM_ITERATIONS = 200
     
     print("\n--- 正在评估您指定的初始策略 ---")
@@ -320,5 +320,5 @@ if __name__ == '__main__':
 #   - 单弹有效遮蔽: 2.800 s
 #   - 遮蔽时间段: 32.845s - 35.545s
 # =================================================================
-# 最大有效综合遮蔽时间: 11.300 s
+# 最大有效综合遮蔽时间: 11.350 s
 # =================================================================
